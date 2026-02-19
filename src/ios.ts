@@ -1,9 +1,5 @@
-import path from "path";
-import { tmpdir } from "os";
-import { randomBytes } from "crypto";
-import { readFileSync, unlinkSync } from "fs";
-import { execFileSync } from "child_process";
-import { Socket } from "net";
+import { Socket } from "node:net";
+import { execFileSync } from "node:child_process";
 
 import { WebDriverAgent } from "./webdriver-agent";
 import { ActionableError, Button, InstalledApp, Robot, ScreenSize, SwipeDirection, ScreenElement, Orientation } from "./robot";
@@ -121,6 +117,11 @@ export class IosRobot implements Robot {
 		await wda.swipe(direction);
 	}
 
+	public async swipeFromCoordinate(x: number, y: number, direction: SwipeDirection, distance?: number): Promise<void> {
+		const wda = await this.wda();
+		await wda.swipeFromCoordinate(x, y, direction, distance);
+	}
+
 	public async listApps(): Promise<InstalledApp[]> {
 		await this.assertTunnelRunning();
 
@@ -146,6 +147,30 @@ export class IosRobot implements Robot {
 		await this.ios("kill", packageName);
 	}
 
+	public async installApp(path: string): Promise<void> {
+		await this.assertTunnelRunning();
+		try {
+			await this.ios("install", "--path", path);
+		} catch (error: any) {
+			const stdout = error.stdout ? error.stdout.toString() : "";
+			const stderr = error.stderr ? error.stderr.toString() : "";
+			const output = (stdout + stderr).trim();
+			throw new ActionableError(output || error.message);
+		}
+	}
+
+	public async uninstallApp(bundleId: string): Promise<void> {
+		await this.assertTunnelRunning();
+		try {
+			await this.ios("uninstall", "--bundleid", bundleId);
+		} catch (error: any) {
+			const stdout = error.stdout ? error.stdout.toString() : "";
+			const stderr = error.stderr ? error.stderr.toString() : "";
+			const output = (stdout + stderr).trim();
+			throw new ActionableError(output || error.message);
+		}
+	}
+
 	public async openUrl(url: string): Promise<void> {
 		const wda = await this.wda();
 		await wda.openUrl(url);
@@ -166,18 +191,33 @@ export class IosRobot implements Robot {
 		await wda.tap(x, y);
 	}
 
+	public async doubleTap(x: number, y: number): Promise<void> {
+		const wda = await this.wda();
+		await wda.doubleTap(x, y);
+	}
+
+	public async longPress(x: number, y: number, duration: number): Promise<void> {
+		const wda = await this.wda();
+		await wda.longPress(x, y, duration);
+	}
+
 	public async getElementsOnScreen(): Promise<ScreenElement[]> {
 		const wda = await this.wda();
 		return await wda.getElementsOnScreen();
 	}
 
 	public async getScreenshot(): Promise<Buffer> {
+		const wda = await this.wda();
+		return await wda.getScreenshot();
+
+		/* alternative:
 		await this.assertTunnelRunning();
 		const tmpFilename = path.join(tmpdir(), `screenshot-${randomBytes(8).toString("hex")}.png`);
 		await this.ios("screenshot", "--output", tmpFilename);
 		const buffer = readFileSync(tmpFilename);
 		unlinkSync(tmpFilename);
 		return buffer;
+		*/
 	}
 
 	public async setOrientation(orientation: Orientation): Promise<void> {
@@ -193,7 +233,7 @@ export class IosRobot implements Robot {
 
 export class IosManager {
 
-	public async isGoIosInstalled(): Promise<boolean> {
+	public isGoIosInstalled(): boolean {
 		try {
 			const output = execFileSync(getGoIosPath(), ["version"], { stdio: ["pipe", "pipe", "ignore"] }).toString();
 			const json: VersionCommandOutput = JSON.parse(output);
@@ -203,25 +243,51 @@ export class IosManager {
 		}
 	}
 
-	public async getDeviceName(deviceId: string): Promise<string> {
+	public getDeviceName(deviceId: string): string {
 		const output = execFileSync(getGoIosPath(), ["info", "--udid", deviceId]).toString();
 		const json: InfoCommandOutput = JSON.parse(output);
 		return json.DeviceName;
 	}
 
-	public async listDevices(): Promise<IosDevice[]> {
-		if (!(await this.isGoIosInstalled())) {
+	public getDeviceInfo(deviceId: string): InfoCommandOutput {
+		const output = execFileSync(getGoIosPath(), ["info", "--udid", deviceId]).toString();
+		const json: InfoCommandOutput = JSON.parse(output);
+		return json;
+	}
+
+	public listDevices(): IosDevice[] {
+		if (!this.isGoIosInstalled()) {
 			console.error("go-ios is not installed, no physical iOS devices can be detected");
 			return [];
 		}
 
 		const output = execFileSync(getGoIosPath(), ["list"]).toString();
 		const json: ListCommandOutput = JSON.parse(output);
-		const devices = json.deviceList.map(async device => ({
+		const devices = json.deviceList.map(device => ({
 			deviceId: device,
-			deviceName: await this.getDeviceName(device),
+			deviceName: this.getDeviceName(device),
 		}));
 
-		return Promise.all(devices);
+		return devices;
+	}
+
+	public listDevicesWithDetails(): Array<IosDevice & { version: string }> {
+		if (!this.isGoIosInstalled()) {
+			console.error("go-ios is not installed, no physical iOS devices can be detected");
+			return [];
+		}
+
+		const output = execFileSync(getGoIosPath(), ["list"]).toString();
+		const json: ListCommandOutput = JSON.parse(output);
+		const devices = json.deviceList.map(device => {
+			const info = this.getDeviceInfo(device);
+			return {
+				deviceId: device,
+				deviceName: info.DeviceName,
+				version: info.ProductVersion,
+			};
+		});
+
+		return devices;
 	}
 }
